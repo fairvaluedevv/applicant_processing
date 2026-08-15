@@ -59,7 +59,7 @@ RUN chmod +x /home/frappe/docker-entrypoint.sh
 USER frappe
 
 # 7. Build production static assets
-RUN bench build --app applicant_processing || true
+RUN cd sites && ../env/bin/python -m frappe.utils.bench_helper frappe build --app applicant_processing || true
 
 EXPOSE 8000
 
