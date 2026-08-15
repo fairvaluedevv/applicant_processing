@@ -252,7 +252,11 @@ if [ -n "$DETECTED_DOMAIN" ] && [ "$DETECTED_DOMAIN" != "$SITE_NAME" ]; then
   ln -sfn "$SITE_NAME" "$DETECTED_DOMAIN" || true
 fi
 
-echo "$SITE_NAME" > currentsite.txt
+# Ensure frontend static assets are available
+if [ ! -f "assets/assets.json" ]; then
+  echo "Assets manifest not found. Building frontend assets..."
+  ../env/bin/python -m frappe.utils.bench_helper frappe build || true
+fi
 
 echo "=========================================================="
 echo " Starting production web server on 0.0.0.0:$PORT..."

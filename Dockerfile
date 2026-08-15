@@ -41,9 +41,11 @@ RUN mkdir -p /home/frappe/frappe-bench/apps \
 
 ENV PATH="/home/frappe/frappe-bench/env/bin:${PATH}"
 
-# 4. Clone and install Frappe v15 core
+# 4. Clone and install Frappe v15 core + yarn dependencies
 WORKDIR /home/frappe/frappe-bench
 RUN git clone --depth 1 --branch version-15 https://github.com/frappe/frappe.git apps/frappe \
+    && cd apps/frappe && yarn install \
+    && cd /home/frappe/frappe-bench \
     && ./env/bin/pip install --no-cache-dir -e ./apps/frappe
 
 # 5. Copy and install applicant_processing app
@@ -58,8 +60,8 @@ USER root
 RUN chmod +x /home/frappe/docker-entrypoint.sh
 USER frappe
 
-# 7. Build production static assets
-RUN cd sites && ../env/bin/python -m frappe.utils.bench_helper frappe build --app applicant_processing || true
+# 7. Build production static assets for Frappe core and apps
+RUN cd sites && ../env/bin/python -m frappe.utils.bench_helper frappe build
 
 EXPOSE 8000
 
