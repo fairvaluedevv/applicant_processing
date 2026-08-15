@@ -1,66 +1,123 @@
 #!/bin/bash
 set -e
 
-# Detect Railway domain or fallback to configured SITE_NAME
-DETECTED_DOMAIN="${RAILWAY_PUBLIC_DOMAIN:-${RAILWAY_STATIC_URL:-}}"
-DETECTED_DOMAIN="${DETECTED_DOMAIN#https://}"
-DETECTED_DOMAIN="${DETECTED_DOMAIN%/}"
+cd /home/frappe/frappe-bench
 
-SITE_NAME="${SITE_NAME:-${DETECTED_DOMAIN:-applicant-processing.railway.internal}}"
-PORT="${PORT:-8000}"
+export PYTHONPATH="/home/frappe/frappe-bench/apps/frappe:/home/frappe/frappe-bench/apps/applicant_processing:/home/frappe/frappe-bench/sites:${PYTHONPATH}"
+
+# Ensure bench logs and sites directory exist
+mkdir -p /home/frappe/frappe-bench/logs
+mkdir -p /home/frappe/frappe-bench/sites
+
+# Ensure clean apps.txt in bench root and sites directory
+printf "frappe\napplicant_processing\n" > /home/frappe/frappe-bench/sites/apps.txt
+cp /home/frappe/frappe-bench/sites/apps.txt /home/frappe/frappe-bench/apps.txt
+
+# 1. Initialize environment, parse Redis URL and write valid common_site_config.json via Python
+./env/bin/python - <<'EOF'
+import os, json, urllib.parse
+
+# 1. Detect Domain & Site Name
+detected = (os.environ.get("RAILWAY_PUBLIC_DOMAIN") or os.environ.get("RAILWAY_STATIC_URL") or "").strip()
+if detected.startswith("https://"):
+    detected = detected[8:]
+elif detected.startswith("http://"):
+    detected = detected[7:]
+detected = detected.rstrip("/")
+
+site_name = (os.environ.get("SITE_NAME") or detected or "applicant-processing.railway.internal").strip()
+port_val = (os.environ.get("PORT") or "8000").strip()
+try:
+    port = int(port_val)
+except ValueError:
+    port = 8000
+
+# 2. Resolve Redis URL
+redis_pw = (os.environ.get("REDISPASSWORD") or os.environ.get("REDIS_PASSWORD") or os.environ.get("REDIS_AUTH") or "").strip()
+redis_host = (os.environ.get("REDISHOST") or os.environ.get("REDIS_HOST") or "").strip()
+redis_port = (os.environ.get("REDISPORT") or os.environ.get("REDIS_PORT") or "6379").strip()
+redis_raw = (os.environ.get("REDIS_PRIVATE_URL") or os.environ.get("REDIS_URL") or "").strip()
+
+h = "redis.railway.internal"
+p = 6379
+
+if redis_raw:
+    clean_url = redis_raw.replace("\r", "").replace("\n", "").strip()
+    if not (clean_url.startswith("redis://") or clean_url.startswith("rediss://")):
+        clean_url = "redis://" + clean_url
+    
+    parsed = urllib.parse.urlparse(clean_url)
+    h = parsed.hostname or "redis.railway.internal"
+    try:
+        p = parsed.port or int(redis_port)
+    except ValueError:
+        p = 6379
+    pw = parsed.password or redis_pw
+    u = parsed.username or "default"
+    
+    if pw:
+        final_redis = f"{parsed.scheme}://{u}:{pw}@{h}:{p}"
+    else:
+        final_redis = f"{parsed.scheme}://{h}:{p}"
+elif redis_host:
+    h = redis_host
+    try:
+        p = int(redis_port)
+    except ValueError:
+        p = 6379
+    if redis_pw:
+        final_redis = f"redis://default:{redis_pw}@{h}:{p}"
+    else:
+        final_redis = f"redis://{h}:{p}"
+else:
+    final_redis = "redis://redis:6379"
+
+# 3. Write common_site_config.json
+common_config = {
+    "auto_update": False,
+    "background_workers": 1,
+    "default_site": site_name,
+    "developer_mode": 0,
+    "dns_multitenant": False,
+    "file_watcher_port": 6787,
+    "gunicorn_workers": 2,
+    "rebase_on_pull": False,
+    "redis_cache": final_redis,
+    "redis_queue": final_redis,
+    "redis_socketio": final_redis,
+    "restart_supervisor_on_update": False,
+    "restart_systemd_on_update": False,
+    "serve_default_site": True,
+    "socketio_port": 9000,
+    "webserver_port": port
+}
+
+with open("sites/common_site_config.json", "w") as f:
+    json.dump(common_config, f, indent=2)
+
+with open("common_site_config.json", "w") as f:
+    json.dump(common_config, f, indent=2)
+
+with open("/tmp/frappe_env.sh", "w") as f:
+    f.write(f"export SITE_NAME='{site_name}'\n")
+    f.write(f"export PORT='{port}'\n")
+    f.write(f"export DETECTED_DOMAIN='{detected}'\n")
+    f.write(f"export REDIS_URL='{final_redis}'\n")
+    f.write(f"export REDIS_CHECK_HOST='{h}'\n")
+    f.write(f"export REDIS_CHECK_PORT='{p}'\n")
+
+print("Generated valid common_site_config.json successfully.")
+EOF
+
+source /tmp/frappe_env.sh
+
+# Database variables
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-admin}"
-
-# Support both MariaDB Docker image variables and Railway MySQL variables
 DB_HOST="${DB_HOST:-${MARIADB_HOST:-${MYSQLHOST:-mariadb}}}"
 DB_PORT="${DB_PORT:-${MARIADB_PORT:-${MYSQLPORT:-3306}}}"
 DB_NAME="${DB_NAME:-${MARIADB_DATABASE:-${MYSQLDATABASE:-frappe}}}"
 DB_USER="${DB_USER:-${MARIADB_USER:-root}}"
 DB_PASSWORD="${DB_PASSWORD:-${MARIADB_PASSWORD:-${MYSQLPASSWORD:-${MARIADB_ROOT_PASSWORD:-root}}}}"
-
-# Normalize Redis Host / URL / Password supporting Railway Redis variables
-REDIS_PW="${REDISPASSWORD:-${REDIS_PASSWORD:-${REDIS_AUTH:-}}}"
-REDIS_PORT="${REDISPORT:-${REDIS_PORT:-6379}}"
-REDIS_HOST="${REDISHOST:-${REDIS_HOST:-}}"
-
-if [ -n "$REDIS_PRIVATE_URL" ]; then
-  REDIS_URL="$REDIS_PRIVATE_URL"
-elif [ -n "$REDIS_URL" ] && [[ "$REDIS_URL" == redis*://*:*@* ]]; then
-  # Already full authenticated URL (e.g. redis://default:pass@host:port)
-  :
-elif [ -n "$REDIS_HOST" ]; then
-  if [ -n "$REDIS_PW" ]; then
-    REDIS_URL="redis://default:${REDIS_PW}@${REDIS_HOST}:${REDIS_PORT}"
-  else
-    REDIS_URL="redis://${REDIS_HOST}:${REDIS_PORT}"
-  fi
-elif [ -n "$REDIS_URL" ]; then
-  CLEAN_REDIS="${REDIS_URL#*://}"
-  if [[ "$CLEAN_REDIS" == *"@"* ]]; then
-    AUTH_PART="${CLEAN_REDIS%%@*}"
-    HOST_PART="${CLEAN_REDIS#*@}"
-  else
-    AUTH_PART=""
-    HOST_PART="$CLEAN_REDIS"
-  fi
-  # If HOST_PART has no port, append default port
-  if [[ "$HOST_PART" != *":"* ]]; then
-    HOST_PART="${HOST_PART}:${REDIS_PORT}"
-  fi
-  # If AUTH_PART is missing but password exists, inject default user + password
-  if [ -z "$AUTH_PART" ] && [ -n "$REDIS_PW" ]; then
-    AUTH_PART="default:${REDIS_PW}"
-  fi
-  if [ -n "$AUTH_PART" ]; then
-    REDIS_URL="redis://${AUTH_PART}@${HOST_PART}"
-  else
-    REDIS_URL="redis://${HOST_PART}"
-  fi
-else
-  REDIS_URL="redis://redis:6379"
-fi
-
-REDIS_CACHE_URL="${REDIS_CACHE_URL:-${REDIS_URL}}"
-REDIS_QUEUE_URL="${REDIS_QUEUE_URL:-${REDIS_URL}}"
 
 echo "=========================================================="
 echo " Starting Applicant Processing App on Railway"
@@ -72,40 +129,6 @@ echo " DB Name:     $DB_NAME"
 echo " Redis URL:   $REDIS_URL"
 echo "=========================================================="
 
-cd /home/frappe/frappe-bench
-
-export PYTHONPATH="/home/frappe/frappe-bench/apps/frappe:/home/frappe/frappe-bench/apps/applicant_processing:/home/frappe/frappe-bench/sites:${PYTHONPATH}"
-
-# Ensure bench logs directory exists
-mkdir -p /home/frappe/frappe-bench/logs
-
-# Ensure clean apps.txt in bench root and sites directory
-printf "frappe\napplicant_processing\n" > sites/apps.txt
-cp sites/apps.txt apps.txt
-
-# 1. Update common_site_config.json with default_site & Redis URLs
-cat <<EOF > sites/common_site_config.json
-{
-  "auto_update": false,
-  "background_workers": 1,
-  "default_site": "${SITE_NAME}",
-  "developer_mode": 0,
-  "dns_multitenant": false,
-  "file_watcher_port": 6787,
-  "gunicorn_workers": 2,
-  "rebase_on_pull": false,
-  "redis_cache": "${REDIS_CACHE_URL}",
-  "redis_queue": "${REDIS_QUEUE_URL}",
-  "redis_socketio": "${REDIS_CACHE_URL}",
-  "restart_supervisor_on_update": false,
-  "restart_systemd_on_update": false,
-  "serve_default_site": true,
-  "socketio_port": 9000,
-  "webserver_port": ${PORT}
-}
-EOF
-cp sites/common_site_config.json common_site_config.json 2>/dev/null || true
-
 # 2. Wait for Database and Redis
 echo "Waiting for Database connection at $DB_HOST:$DB_PORT..."
 until nc -z -v -w30 "$DB_HOST" "$DB_PORT" 2>/dev/null; do
@@ -113,10 +136,6 @@ until nc -z -v -w30 "$DB_HOST" "$DB_PORT" 2>/dev/null; do
   sleep 3
 done
 echo "Database is reachable!"
-
-REDIS_CHECK_HOST=$(echo "$REDIS_URL" | sed -E 's|.*@||; s|redis://||; s|/.*||; s|:.*||')
-REDIS_CHECK_PORT=$(echo "$REDIS_URL" | sed -E 's|.*:([0-9]+).*|\1|')
-REDIS_CHECK_PORT="${REDIS_CHECK_PORT:-6379}"
 
 if [ -n "$REDIS_CHECK_HOST" ] && [ "$REDIS_CHECK_HOST" != "redis" ]; then
   echo "Waiting for Redis connection at $REDIS_CHECK_HOST:$REDIS_CHECK_PORT..."
@@ -176,15 +195,18 @@ else
   echo "=========================================================="
   echo " Existing database detected. Running migrations on: $SITE_NAME..."
   echo "=========================================================="
-  cat <<EOF > "$SITE_NAME/site_config.json"
-{
+  ../env/bin/python - <<EOF
+import json
+cfg = {
   "db_name": "${DB_NAME}",
   "db_password": "${DB_PASSWORD}",
   "db_type": "mariadb",
   "db_host": "${DB_HOST}",
-  "db_port": ${DB_PORT},
+  "db_port": int("${DB_PORT}"),
   "db_user": "frappe"
 }
+with open("${SITE_NAME}/site_config.json", "w") as f:
+    json.dump(cfg, f, indent=2)
 EOF
   ../env/bin/python -m frappe.utils.bench_helper frappe --site "$SITE_NAME" migrate || true
   ../env/bin/python -m frappe.utils.bench_helper frappe --site "$SITE_NAME" install-app applicant_processing || true
