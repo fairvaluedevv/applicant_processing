@@ -41,18 +41,18 @@ RUN mkdir -p /home/frappe/frappe-bench/apps \
 
 ENV PATH="/home/frappe/frappe-bench/env/bin:${PATH}"
 
-# 4. Install Frappe core into venv
+# 4. Clone and install Frappe v15 core
 WORKDIR /home/frappe/frappe-bench
-COPY --chown=frappe:frappe apps/frappe apps/frappe
-RUN ./env/bin/pip install --no-cache-dir -e ./apps/frappe
+RUN git clone --depth 1 --branch version-15 https://github.com/frappe/frappe.git apps/frappe \
+    && ./env/bin/pip install --no-cache-dir -e ./apps/frappe
 
 # 5. Copy and install applicant_processing app
-COPY --chown=frappe:frappe apps/applicant_processing apps/applicant_processing
+COPY --chown=frappe:frappe . apps/applicant_processing
 RUN ./env/bin/pip install --no-cache-dir -e ./apps/applicant_processing
 
-# 6. Copy configuration and sites baseline
-COPY --chown=frappe:frappe sites/apps.txt sites/apps.txt
-COPY --chown=frappe:frappe docker-entrypoint.sh /home/frappe/docker-entrypoint.sh
+# 6. Configure sites and entrypoint
+RUN printf "frappe\napplicant_processing\n" > sites/apps.txt \
+    && cp apps/applicant_processing/docker-entrypoint.sh /home/frappe/docker-entrypoint.sh
 
 USER root
 RUN chmod +x /home/frappe/docker-entrypoint.sh
