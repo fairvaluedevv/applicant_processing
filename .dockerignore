@@ -1,0 +1,13 @@
+.git
+.github
+env/
+logs/
+sites/*/locks
+sites/*/backups
+sites/*/private/backups
+node_modules/
+archived/
+scratch/
+*.pyc
+__pycache__
+.DS_Store
