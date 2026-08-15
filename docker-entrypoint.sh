@@ -32,11 +32,20 @@ try:
 except ValueError:
     port = 8000
 
-# 2. Resolve Redis URL
+# 2. Scan all environment variables for Redis URL and Password
+redis_raw = (os.environ.get("REDIS_PRIVATE_URL") or os.environ.get("REDIS_URL") or os.environ.get("REDIS_PUBLIC_URL") or "").strip()
 redis_pw = (os.environ.get("REDISPASSWORD") or os.environ.get("REDIS_PASSWORD") or os.environ.get("REDIS_AUTH") or "").strip()
 redis_host = (os.environ.get("REDISHOST") or os.environ.get("REDIS_HOST") or "").strip()
 redis_port = (os.environ.get("REDISPORT") or os.environ.get("REDIS_PORT") or "6379").strip()
-redis_raw = (os.environ.get("REDIS_PRIVATE_URL") or os.environ.get("REDIS_URL") or "").strip()
+
+for k, v in os.environ.items():
+    if not redis_raw and ("REDIS" in k.upper() or "CACHE" in k.upper()) and ("redis://" in v or "rediss://" in v):
+        redis_raw = v.strip()
+    if not redis_pw and "REDIS" in k.upper() and ("PASS" in k.upper() or "SECRET" in k.upper() or "AUTH" in k.upper()):
+        redis_pw = v.strip()
+
+if not redis_raw and not redis_host:
+    redis_host = "redis.railway.internal"
 
 h = "redis.railway.internal"
 p = 6379
@@ -59,7 +68,7 @@ if redis_raw:
         final_redis = f"{parsed.scheme}://{u}:{pw}@{h}:{p}"
     else:
         final_redis = f"{parsed.scheme}://{h}:{p}"
-elif redis_host:
+else:
     h = redis_host
     try:
         p = int(redis_port)
@@ -69,8 +78,13 @@ elif redis_host:
         final_redis = f"redis://default:{redis_pw}@{h}:{p}"
     else:
         final_redis = f"redis://{h}:{p}"
-else:
-    final_redis = "redis://redis:6379"
+
+masked_redis = final_redis
+if "@" in final_redis:
+    scheme_user, host_port = final_redis.split("@", 1)
+    if ":" in scheme_user[8:]:
+        scheme_prefix = scheme_user[:scheme_user.rfind(":") + 1]
+        masked_redis = f"{scheme_prefix}***@{host_port}"
 
 # 3. Write common_site_config.json
 common_config = {
@@ -103,6 +117,7 @@ with open("/tmp/frappe_env.sh", "w") as f:
     f.write(f"export PORT='{port}'\n")
     f.write(f"export DETECTED_DOMAIN='{detected}'\n")
     f.write(f"export REDIS_URL='{final_redis}'\n")
+    f.write(f"export MASKED_REDIS='{masked_redis}'\n")
     f.write(f"export REDIS_CHECK_HOST='{h}'\n")
     f.write(f"export REDIS_CHECK_PORT='{p}'\n")
 
@@ -126,7 +141,7 @@ echo " Detected:    $DETECTED_DOMAIN"
 echo " Port:        $PORT"
 echo " DB Host:     $DB_HOST:$DB_PORT"
 echo " DB Name:     $DB_NAME"
-echo " Redis URL:   $REDIS_URL"
+echo " Redis URL:   $MASKED_REDIS"
 echo "=========================================================="
 
 # 2. Wait for Database and Redis
