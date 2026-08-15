@@ -20,7 +20,9 @@ import os, json, urllib.parse
 def clean(v):
     if v is None:
         return ""
-    s = str(v).strip().strip('"').strip("'").replace("\r", "").replace("\n", "").strip()
+    s = str(v).strip()
+    # Strip backslashes, quotes, and whitespace
+    s = s.replace('\\"', '').replace("\\'", '').strip('"').strip("'").strip('\\').replace("\r", "").replace("\n", "").strip()
     return s
 
 # 1. Detect Domain & Site Name
@@ -77,7 +79,7 @@ if redis_raw and len(redis_raw) > 2:
     try:
         parsed = urllib.parse.urlparse(redis_raw)
         parsed_h = clean(parsed.hostname)
-        if parsed_h and len(parsed_h) > 1:
+        if parsed_h and len(parsed_h) > 1 and parsed_h not in ('"', "'", "\\"):
             h = parsed_h
         if parsed.port:
             p = parsed.port
@@ -87,7 +89,7 @@ if redis_raw and len(redis_raw) > 2:
             u = clean(parsed.username)
     except Exception:
         pass
-elif redis_host and len(redis_host) > 1:
+elif redis_host and len(redis_host) > 1 and redis_host not in ('"', "'", "\\"):
     h = redis_host
 
 try:
