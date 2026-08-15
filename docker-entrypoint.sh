@@ -79,8 +79,9 @@ export PYTHONPATH="/home/frappe/frappe-bench/apps/frappe:/home/frappe/frappe-ben
 # Ensure bench logs directory exists
 mkdir -p /home/frappe/frappe-bench/logs
 
-# Ensure clean apps.txt
+# Ensure clean apps.txt in bench root and sites directory
 printf "frappe\napplicant_processing\n" > sites/apps.txt
+cp sites/apps.txt apps.txt
 
 # 1. Update common_site_config.json with default_site & Redis URLs
 cat <<EOF > sites/common_site_config.json
@@ -103,6 +104,7 @@ cat <<EOF > sites/common_site_config.json
   "webserver_port": ${PORT}
 }
 EOF
+cp sites/common_site_config.json common_site_config.json 2>/dev/null || true
 
 # 2. Wait for Database and Redis
 echo "Waiting for Database connection at $DB_HOST:$DB_PORT..."
@@ -140,13 +142,15 @@ for P in "$MARIADB_ROOT_PASSWORD" "$DB_PASSWORD" "$MYSQLPASSWORD" "$MYSQL_ROOT_P
   fi
 done
 
+cd /home/frappe/frappe-bench/sites
+
 # 3. Create site directory and all required subdirectories
-mkdir -p "sites/$SITE_NAME/logs"
-mkdir -p "sites/$SITE_NAME/public/files"
-mkdir -p "sites/$SITE_NAME/private/files"
-mkdir -p "sites/$SITE_NAME/private/backups"
-touch "sites/$SITE_NAME/logs/frappe.log"
-touch "sites/$SITE_NAME/logs/frappe.web.log"
+mkdir -p "$SITE_NAME/logs"
+mkdir -p "$SITE_NAME/public/files"
+mkdir -p "$SITE_NAME/private/files"
+mkdir -p "$SITE_NAME/private/backups"
+touch "$SITE_NAME/logs/frappe.log"
+touch "$SITE_NAME/logs/frappe.web.log"
 
 # 4. Check if site is fully initialized with core tables (e.g. tabUser)
 USER_TABLE_EXISTS=$(mariadb -h "$DB_HOST" -P "$DB_PORT" -u "frappe" -p"$DB_PASSWORD" -D "$DB_NAME" -e "SHOW TABLES LIKE 'tabUser';" 2>/dev/null | grep tabUser || true)
@@ -155,7 +159,7 @@ if [ -z "$USER_TABLE_EXISTS" ]; then
   echo "=========================================================="
   echo " Initializing full Frappe site: $SITE_NAME..."
   echo "=========================================================="
-  ./env/bin/python -m frappe.utils.bench_helper frappe new-site "$SITE_NAME" \
+  ../env/bin/python -m frappe.utils.bench_helper frappe new-site "$SITE_NAME" \
     --db-host "$DB_HOST" \
     --db-port "$DB_PORT" \
     --db-name "$DB_NAME" \
@@ -172,7 +176,7 @@ else
   echo "=========================================================="
   echo " Existing database detected. Running migrations on: $SITE_NAME..."
   echo "=========================================================="
-  cat <<EOF > "sites/$SITE_NAME/site_config.json"
+  cat <<EOF > "$SITE_NAME/site_config.json"
 {
   "db_name": "${DB_NAME}",
   "db_password": "${DB_PASSWORD}",
@@ -182,20 +186,20 @@ else
   "db_user": "frappe"
 }
 EOF
-  ./env/bin/python -m frappe.utils.bench_helper frappe --site "$SITE_NAME" migrate || true
-  ./env/bin/python -m frappe.utils.bench_helper frappe --site "$SITE_NAME" install-app applicant_processing || true
+  ../env/bin/python -m frappe.utils.bench_helper frappe --site "$SITE_NAME" migrate || true
+  ../env/bin/python -m frappe.utils.bench_helper frappe --site "$SITE_NAME" install-app applicant_processing || true
   if [ -n "$ADMIN_PASSWORD" ]; then
-    ./env/bin/python -m frappe.utils.bench_helper frappe --site "$SITE_NAME" set-admin-password "$ADMIN_PASSWORD" || true
+    ../env/bin/python -m frappe.utils.bench_helper frappe --site "$SITE_NAME" set-admin-password "$ADMIN_PASSWORD" || true
   fi
 fi
 
 # Link any detected domain alias to the site folder
 if [ -n "$DETECTED_DOMAIN" ] && [ "$DETECTED_DOMAIN" != "$SITE_NAME" ]; then
   echo "Creating symlink alias from $DETECTED_DOMAIN to $SITE_NAME..."
-  ln -sfn "$SITE_NAME" "sites/$DETECTED_DOMAIN" || true
+  ln -sfn "$SITE_NAME" "$DETECTED_DOMAIN" || true
 fi
 
-echo "$SITE_NAME" > sites/currentsite.txt
+echo "$SITE_NAME" > currentsite.txt
 
 echo "=========================================================="
 echo " Starting production web server on 0.0.0.0:$PORT..."
