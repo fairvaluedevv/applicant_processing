@@ -17,76 +17,92 @@ cp /home/frappe/frappe-bench/sites/apps.txt /home/frappe/frappe-bench/apps.txt
 ./env/bin/python - <<'EOF'
 import os, json, urllib.parse
 
+def clean(v):
+    if v is None:
+        return ""
+    s = str(v).strip().strip('"').strip("'").replace("\r", "").replace("\n", "").strip()
+    return s
+
 # 1. Detect Domain & Site Name
-detected = (os.environ.get("RAILWAY_PUBLIC_DOMAIN") or os.environ.get("RAILWAY_STATIC_URL") or "").strip()
+detected = clean(os.environ.get("RAILWAY_PUBLIC_DOMAIN") or os.environ.get("RAILWAY_STATIC_URL") or "")
 if detected.startswith("https://"):
     detected = detected[8:]
 elif detected.startswith("http://"):
     detected = detected[7:]
 detected = detected.rstrip("/")
 
-site_name = (os.environ.get("SITE_NAME") or detected or "applicant-processing.railway.internal").strip()
-port_val = (os.environ.get("PORT") or "8000").strip()
+site_name = clean(os.environ.get("SITE_NAME") or detected or "applicant-processing.railway.internal")
+port_val = clean(os.environ.get("PORT") or "8000")
 try:
     port = int(port_val)
 except ValueError:
     port = 8000
 
-# 2. Scan all environment variables for Redis URL and Password
-redis_raw = (os.environ.get("REDIS_PRIVATE_URL") or os.environ.get("REDIS_URL") or os.environ.get("REDIS_PUBLIC_URL") or "").strip()
-redis_pw = (os.environ.get("REDISPASSWORD") or os.environ.get("REDIS_PASSWORD") or os.environ.get("REDIS_AUTH") or "").strip()
-redis_host = (os.environ.get("REDISHOST") or os.environ.get("REDIS_HOST") or "").strip()
-redis_port = (os.environ.get("REDISPORT") or os.environ.get("REDIS_PORT") or "6379").strip()
+# 2. Database variables
+db_host = clean(os.environ.get("DB_HOST") or os.environ.get("MARIADB_HOST") or os.environ.get("MYSQLHOST") or "mariadb.railway.internal")
+db_port_val = clean(os.environ.get("DB_PORT") or os.environ.get("MARIADB_PORT") or os.environ.get("MYSQLPORT") or "3306")
+try:
+    db_port = int(db_port_val)
+except ValueError:
+    db_port = 3306
+db_name = clean(os.environ.get("DB_NAME") or os.environ.get("MARIADB_DATABASE") or os.environ.get("MYSQLDATABASE") or "frappe")
+db_user = clean(os.environ.get("DB_USER") or os.environ.get("MARIADB_USER") or "frappe")
+db_password = clean(os.environ.get("DB_PASSWORD") or os.environ.get("MARIADB_PASSWORD") or os.environ.get("MYSQLPASSWORD") or os.environ.get("MARIADB_ROOT_PASSWORD") or "root")
+admin_password = clean(os.environ.get("ADMIN_PASSWORD") or "admin")
 
+# 3. Resolve Redis URL & Password
+redis_raw = clean(os.environ.get("REDIS_PRIVATE_URL") or os.environ.get("REDIS_URL") or os.environ.get("REDIS_PUBLIC_URL") or "")
+redis_pw = clean(os.environ.get("REDISPASSWORD") or os.environ.get("REDIS_PASSWORD") or os.environ.get("REDIS_AUTH") or "")
+redis_host = clean(os.environ.get("REDISHOST") or os.environ.get("REDIS_HOST") or "")
+redis_port = clean(os.environ.get("REDISPORT") or os.environ.get("REDIS_PORT") or "6379")
+
+# Scan all env vars for fallback
 for k, v in os.environ.items():
-    if not redis_raw and ("REDIS" in k.upper() or "CACHE" in k.upper()) and ("redis://" in v or "rediss://" in v):
-        redis_raw = v.strip()
+    cv = clean(v)
+    if not redis_raw and ("REDIS" in k.upper() or "CACHE" in k.upper()) and ("redis://" in cv or "rediss://" in cv):
+        redis_raw = cv
     if not redis_pw and "REDIS" in k.upper() and ("PASS" in k.upper() or "SECRET" in k.upper() or "AUTH" in k.upper()):
-        redis_pw = v.strip()
-
-if not redis_raw and not redis_host:
-    redis_host = "redis.railway.internal"
+        redis_pw = cv
+    if not redis_host and "REDIS" in k.upper() and "HOST" in k.upper() and cv:
+        redis_host = cv
 
 h = "redis.railway.internal"
 p = 6379
+pw = redis_pw
+u = "default"
 
-if redis_raw:
-    clean_url = redis_raw.replace("\r", "").replace("\n", "").strip()
-    if not (clean_url.startswith("redis://") or clean_url.startswith("rediss://")):
-        clean_url = "redis://" + clean_url
-    
-    parsed = urllib.parse.urlparse(clean_url)
-    h = parsed.hostname or "redis.railway.internal"
+if redis_raw and len(redis_raw) > 2:
+    if not (redis_raw.startswith("redis://") or redis_raw.startswith("rediss://")):
+        redis_raw = "redis://" + redis_raw
     try:
-        p = parsed.port or int(redis_port)
-    except ValueError:
-        p = 6379
-    pw = parsed.password or redis_pw
-    u = parsed.username or "default"
-    
-    if pw:
-        final_redis = f"{parsed.scheme}://{u}:{pw}@{h}:{p}"
-    else:
-        final_redis = f"{parsed.scheme}://{h}:{p}"
-else:
+        parsed = urllib.parse.urlparse(redis_raw)
+        parsed_h = clean(parsed.hostname)
+        if parsed_h and len(parsed_h) > 1:
+            h = parsed_h
+        if parsed.port:
+            p = parsed.port
+        if parsed.password:
+            pw = clean(parsed.password)
+        if parsed.username:
+            u = clean(parsed.username)
+    except Exception:
+        pass
+elif redis_host and len(redis_host) > 1:
     h = redis_host
-    try:
-        p = int(redis_port)
-    except ValueError:
-        p = 6379
-    if redis_pw:
-        final_redis = f"redis://default:{redis_pw}@{h}:{p}"
-    else:
-        final_redis = f"redis://{h}:{p}"
 
-masked_redis = final_redis
-if "@" in final_redis:
-    scheme_user, host_port = final_redis.split("@", 1)
-    if ":" in scheme_user[8:]:
-        scheme_prefix = scheme_user[:scheme_user.rfind(":") + 1]
-        masked_redis = f"{scheme_prefix}***@{host_port}"
+try:
+    p = int(clean(redis_port) or p)
+except ValueError:
+    p = 6379
 
-# 3. Write common_site_config.json
+if pw:
+    final_redis = f"redis://{u}:{pw}@{h}:{p}"
+    masked_redis = f"redis://{u}:***@{h}:{p}"
+else:
+    final_redis = f"redis://{h}:{p}"
+    masked_redis = final_redis
+
+# 4. Write common_site_config.json
 common_config = {
     "auto_update": False,
     "background_workers": 1,
@@ -116,6 +132,12 @@ with open("/tmp/frappe_env.sh", "w") as f:
     f.write(f"export SITE_NAME='{site_name}'\n")
     f.write(f"export PORT='{port}'\n")
     f.write(f"export DETECTED_DOMAIN='{detected}'\n")
+    f.write(f"export DB_HOST='{db_host}'\n")
+    f.write(f"export DB_PORT='{db_port}'\n")
+    f.write(f"export DB_NAME='{db_name}'\n")
+    f.write(f"export DB_USER='{db_user}'\n")
+    f.write(f"export DB_PASSWORD='{db_password}'\n")
+    f.write(f"export ADMIN_PASSWORD='{admin_password}'\n")
     f.write(f"export REDIS_URL='{final_redis}'\n")
     f.write(f"export MASKED_REDIS='{masked_redis}'\n")
     f.write(f"export REDIS_CHECK_HOST='{h}'\n")
@@ -125,14 +147,6 @@ print("Generated valid common_site_config.json successfully.")
 EOF
 
 source /tmp/frappe_env.sh
-
-# Database variables
-ADMIN_PASSWORD="${ADMIN_PASSWORD:-admin}"
-DB_HOST="${DB_HOST:-${MARIADB_HOST:-${MYSQLHOST:-mariadb}}}"
-DB_PORT="${DB_PORT:-${MARIADB_PORT:-${MYSQLPORT:-3306}}}"
-DB_NAME="${DB_NAME:-${MARIADB_DATABASE:-${MYSQLDATABASE:-frappe}}}"
-DB_USER="${DB_USER:-${MARIADB_USER:-root}}"
-DB_PASSWORD="${DB_PASSWORD:-${MARIADB_PASSWORD:-${MYSQLPASSWORD:-${MARIADB_ROOT_PASSWORD:-root}}}}"
 
 echo "=========================================================="
 echo " Starting Applicant Processing App on Railway"
