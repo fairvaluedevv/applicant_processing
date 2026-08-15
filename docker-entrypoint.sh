@@ -253,8 +253,8 @@ if [ -n "$DETECTED_DOMAIN" ] && [ "$DETECTED_DOMAIN" != "$SITE_NAME" ]; then
 fi
 
 # Ensure frontend static assets are available
-if [ ! -f "assets/assets.json" ]; then
-  echo "Assets manifest not found. Building frontend assets..."
+if [ ! -f "assets/assets.json" ] || [ ! -d "assets/frappe" ]; then
+  echo "Assets manifest not found. Building and linking frontend assets..."
   ../env/bin/python -m frappe.utils.bench_helper frappe build || true
 fi
 
@@ -269,4 +269,4 @@ exec ../env/bin/gunicorn \
   --timeout 120 \
   --worker-class gthread \
   --chdir /home/frappe/frappe-bench/sites \
-  frappe.app:application
+  "frappe.app:application_with_statics()"
