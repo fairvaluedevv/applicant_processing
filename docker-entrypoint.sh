@@ -17,28 +17,43 @@ DB_NAME="${DB_NAME:-${MARIADB_DATABASE:-${MYSQLDATABASE:-frappe}}}"
 DB_USER="${DB_USER:-${MARIADB_USER:-root}}"
 DB_PASSWORD="${DB_PASSWORD:-${MARIADB_PASSWORD:-${MYSQLPASSWORD:-${MARIADB_ROOT_PASSWORD:-root}}}}"
 
-# Robust Redis URL construction supporting Railway Redis variables
+# Normalize Redis Host / URL / Password supporting Railway Redis variables
+REDIS_PW="${REDISPASSWORD:-${REDIS_PASSWORD:-${REDIS_AUTH:-}}}"
+REDIS_PORT="${REDISPORT:-${REDIS_PORT:-6379}}"
+REDIS_HOST="${REDISHOST:-${REDIS_HOST:-}}"
+
 if [ -n "$REDIS_PRIVATE_URL" ]; then
   REDIS_URL="$REDIS_PRIVATE_URL"
 elif [ -n "$REDIS_URL" ] && [[ "$REDIS_URL" == redis*://*:*@* ]]; then
-  # Already full authenticated URL
+  # Already full authenticated URL (e.g. redis://default:pass@host:port)
   :
-elif [ -n "$REDISHOST" ]; then
-  if [ -n "$REDISPASSWORD" ]; then
-    REDIS_URL="redis://default:${REDISPASSWORD}@${REDISHOST}:${REDISPORT:-6379}"
+elif [ -n "$REDIS_HOST" ]; then
+  if [ -n "$REDIS_PW" ]; then
+    REDIS_URL="redis://default:${REDIS_PW}@${REDIS_HOST}:${REDIS_PORT}"
   else
-    REDIS_URL="redis://${REDISHOST}:${REDISPORT:-6379}"
+    REDIS_URL="redis://${REDIS_HOST}:${REDIS_PORT}"
   fi
 elif [ -n "$REDIS_URL" ]; then
-  if [[ "$REDIS_URL" != redis://* ]] && [[ "$REDIS_URL" != rediss://* ]]; then
-    REDIS_URL="redis://${REDIS_URL}"
+  CLEAN_REDIS="${REDIS_URL#*://}"
+  if [[ "$CLEAN_REDIS" == *"@"* ]]; then
+    AUTH_PART="${CLEAN_REDIS%%@*}"
+    HOST_PART="${CLEAN_REDIS#*@}"
+  else
+    AUTH_PART=""
+    HOST_PART="$CLEAN_REDIS"
   fi
-  # If no port specified, append :6379
-  if [[ "$REDIS_URL" =~ ^redis://[^:]+$ ]]; then
-    REDIS_URL="${REDIS_URL}:6379"
+  # If HOST_PART has no port, append default port
+  if [[ "$HOST_PART" != *":"* ]]; then
+    HOST_PART="${HOST_PART}:${REDIS_PORT}"
   fi
-  if [ -n "$REDISPASSWORD" ] && [[ "$REDIS_URL" != *"@"* ]]; then
-    REDIS_URL="${REDIS_URL/redis:\/\//redis:\/\/default:${REDISPASSWORD}@}"
+  # If AUTH_PART is missing but password exists, inject default user + password
+  if [ -z "$AUTH_PART" ] && [ -n "$REDIS_PW" ]; then
+    AUTH_PART="default:${REDIS_PW}"
+  fi
+  if [ -n "$AUTH_PART" ]; then
+    REDIS_URL="redis://${AUTH_PART}@${HOST_PART}"
+  else
+    REDIS_URL="redis://${HOST_PART}"
   fi
 else
   REDIS_URL="redis://redis:6379"
@@ -89,13 +104,26 @@ cat <<EOF > sites/common_site_config.json
 }
 EOF
 
-# 2. Wait for Database
+# 2. Wait for Database and Redis
 echo "Waiting for Database connection at $DB_HOST:$DB_PORT..."
 until nc -z -v -w30 "$DB_HOST" "$DB_PORT" 2>/dev/null; do
   echo "Database is not available yet. Retrying in 3 seconds..."
   sleep 3
 done
 echo "Database is reachable!"
+
+REDIS_CHECK_HOST=$(echo "$REDIS_URL" | sed -E 's|.*@||; s|redis://||; s|/.*||; s|:.*||')
+REDIS_CHECK_PORT=$(echo "$REDIS_URL" | sed -E 's|.*:([0-9]+).*|\1|')
+REDIS_CHECK_PORT="${REDIS_CHECK_PORT:-6379}"
+
+if [ -n "$REDIS_CHECK_HOST" ] && [ "$REDIS_CHECK_HOST" != "redis" ]; then
+  echo "Waiting for Redis connection at $REDIS_CHECK_HOST:$REDIS_CHECK_PORT..."
+  until nc -z -v -w30 "$REDIS_CHECK_HOST" "$REDIS_CHECK_PORT" 2>/dev/null; do
+    echo "Redis is not available yet. Retrying in 3 seconds..."
+    sleep 3
+  done
+  echo "Redis is reachable!"
+fi
 
 # Find working MariaDB password and synchronize user 'frappe' and 'root' passwords
 for P in "$MARIADB_ROOT_PASSWORD" "$DB_PASSWORD" "$MYSQLPASSWORD" "$MYSQL_ROOT_PASSWORD" "root" ""; do
