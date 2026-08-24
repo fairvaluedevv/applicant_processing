@@ -241,6 +241,7 @@ with open("${SITE_NAME}/site_config.json", "w") as f:
 EOF
   ../env/bin/python -m frappe.utils.bench_helper frappe --site "$SITE_NAME" migrate || true
   ../env/bin/python -m frappe.utils.bench_helper frappe --site "$SITE_NAME" install-app applicant_processing || true
+  ../env/bin/python -m frappe.utils.bench_helper frappe --site "$SITE_NAME" execute applicant_processing.applicant_processing.utils.push_api.ensure_vapid_keys || true
   if [ -n "$ADMIN_PASSWORD" ]; then
     ../env/bin/python -m frappe.utils.bench_helper frappe --site "$SITE_NAME" set-admin-password "$ADMIN_PASSWORD" || true
   fi

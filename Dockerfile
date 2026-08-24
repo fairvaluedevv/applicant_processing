@@ -21,11 +21,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-noto-cjk \
     fonts-noto-color-emoji \
     wkhtmltopdf \
+    tesseract-ocr \
+    tesseract-ocr-ara \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
     && npm install -g yarn@1.22.22 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
 
 # 2. Create non-root frappe user
 RUN useradd -ms /bin/bash -u 1000 frappe
